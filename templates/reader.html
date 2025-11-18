@@ -36,6 +36,31 @@
         .nav-btn:hover { background: #3498db; color: white; }
         .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: #ccc; color: #ccc; }
 
+        /* Assistant Panel */
+        #assistant-panel { width: 360px; background: #fdfcfe; border-left: 1px solid #e9ecef; padding: 20px; overflow-y: auto; font-family: -apple-system, sans-serif; }
+        .assistant-header { font-weight: 600; font-size: 1.05em; margin-bottom: 10px; }
+        .assistant-section { margin-bottom: 18px; }
+        .assistant-label { font-size: 0.85em; color: #6c757d; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+        #contextList { display: flex; flex-direction: column; gap: 8px; }
+        .context-card { background: white; border: 1px solid #dee2e6; border-radius: 6px; padding: 8px 10px; position: relative; }
+        .context-card button { position: absolute; top: 6px; right: 6px; border: none; background: transparent; color: #999; cursor: pointer; font-size: 0.85em; }
+        .context-card button:hover { color: #d11a2a; }
+        .context-card small { display: block; color: #adb5bd; margin-top: 6px; font-size: 0.75em; }
+        .context-empty { font-size: 0.9em; color: #868e96; font-style: italic; }
+
+        .assistant-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .assistant-actions button { flex: 1; border: 1px solid #ced4da; background: white; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-weight: 500; }
+        .assistant-actions button.primary { background: #212529; color: white; border-color: #212529; }
+        .assistant-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        textarea#questionInput { width: 100%; min-height: 80px; border: 1px solid #ced4da; border-radius: 6px; padding: 10px; font-family: inherit; font-size: 0.95em; resize: vertical; }
+
+        #assistantStatus { font-size: 0.85em; color: #868e96; min-height: 18px; margin-top: 6px; }
+        #assistantResponse { background: white; border: 1px solid #e9ecef; border-radius: 6px; padding: 12px; white-space: pre-wrap; line-height: 1.5; font-size: 0.95em; }
+
+        .selection-tooltip { position: absolute; background: #212529; color: white; padding: 6px 10px; border-radius: 999px; font-size: 0.85em; pointer-events: auto; cursor: pointer; box-shadow: 0 8px 20px rgba(0,0,0,0.15); z-index: 10; }
+        .selection-tooltip.hidden { display: none; }
+
     </style>
 </head>
 <body>
@@ -121,6 +146,38 @@
         </div>
     </div>
 
+    <div id="assistant-panel">
+        <div class="assistant-header">LLM Assistant</div>
+
+        <div class="assistant-section">
+            <div class="assistant-label">Context snippets</div>
+            <div id="contextList"></div>
+            <div id="contextEmpty" class="context-empty">Highlight text and use “Add to context” to build a prompt.</div>
+            <div id="contextMeta" class="assistant-label" style="margin-top: 8px; text-transform:none;"></div>
+            <div class="assistant-actions" style="margin-top:10px;">
+                <button id="addChapterBtn" title="Use the whole chapter as context">Use section</button>
+                <button id="clearContextBtn" title="Remove all snippets">Clear</button>
+            </div>
+        </div>
+
+        <div class="assistant-section">
+            <div class="assistant-label">Question</div>
+            <textarea id="questionInput" placeholder="Ask about the selected passage..."></textarea>
+            <div class="assistant-actions" style="margin-top: 10px;">
+                <button id="askButton" class="primary">Ask question</button>
+                <button id="summaryButton" title="Get a concise summary of the active section">Summarize section</button>
+            </div>
+            <div id="assistantStatus"></div>
+        </div>
+
+        <div class="assistant-section">
+            <div class="assistant-label">Answer</div>
+            <div id="assistantResponse">Answers will appear here.</div>
+        </div>
+    </div>
+
+    <div id="selectionTooltip" class="selection-tooltip hidden">Add to context</div>
+
     <script>
         // Helper to map TOC filenames to Spine Indices
         // Pass the spine data from python to JS
@@ -149,6 +206,230 @@
                 console.log("Could not find index for", filename);
             }
         }
+
+        // --- LLM Assistant ---
+        const readerConfig = {{ {
+            "bookId": book_id,
+            "chapterIndex": chapter_index,
+            "bookTitle": book.metadata.title,
+        } | tojson }};
+
+        const assistantState = {
+            contextSnippets: [],
+            isBusy: false,
+        };
+
+        const contextListEl = document.getElementById("contextList");
+        const contextEmptyEl = document.getElementById("contextEmpty");
+        const contextMetaEl = document.getElementById("contextMeta");
+        const questionInputEl = document.getElementById("questionInput");
+        const askButtonEl = document.getElementById("askButton");
+        const summaryButtonEl = document.getElementById("summaryButton");
+        const statusEl = document.getElementById("assistantStatus");
+        const responseEl = document.getElementById("assistantResponse");
+        const clearBtn = document.getElementById("clearContextBtn");
+        const addChapterBtn = document.getElementById("addChapterBtn");
+        const tooltipEl = document.getElementById("selectionTooltip");
+        const mainEl = document.getElementById("main");
+
+        function makeId() {
+            if (window.crypto?.randomUUID) return crypto.randomUUID();
+            return String(Date.now() + Math.random());
+        }
+
+        function renderContext() {
+            contextListEl.innerHTML = "";
+            if (!assistantState.contextSnippets.length) {
+                contextEmptyEl.style.display = "block";
+                contextMetaEl.textContent = "";
+                return;
+            }
+            contextEmptyEl.style.display = "none";
+
+            let totalChars = 0;
+            assistantState.contextSnippets.forEach((snippet, idx) => {
+                totalChars += snippet.text.length;
+                const card = document.createElement("div");
+                card.className = "context-card";
+
+                const remover = document.createElement("button");
+                remover.setAttribute("aria-label", "Remove snippet");
+                remover.innerHTML = "×";
+                remover.addEventListener("click", () => removeSnippet(snippet.id));
+
+                const content = document.createElement("div");
+                content.textContent = snippet.text;
+
+                const meta = document.createElement("small");
+                meta.textContent = snippet.label || `Snippet ${idx + 1}`;
+
+                card.appendChild(remover);
+                card.appendChild(content);
+                card.appendChild(meta);
+                contextListEl.appendChild(card);
+            });
+
+            contextMetaEl.textContent = `${assistantState.contextSnippets.length} snippet(s) • ${totalChars} characters`;
+        }
+
+        function removeSnippet(id) {
+            assistantState.contextSnippets = assistantState.contextSnippets.filter(s => s.id !== id);
+            renderContext();
+        }
+
+        function clearContext() {
+            assistantState.contextSnippets = [];
+            renderContext();
+        }
+
+        function addSnippetFromSelection(text, label, maxLen = 2000) {
+            const clean = text.trim();
+            if (!clean) return;
+            const snippet = {
+                id: makeId(),
+                text: clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean,
+                label: label || `Selection`,
+            };
+            assistantState.contextSnippets.push(snippet);
+            renderContext();
+        }
+
+        function addChapterAsContext() {
+            const chapterText = document.querySelector(".book-content")?.innerText || "";
+            if (!chapterText.trim()) {
+                alert("Couldn't read the chapter text from the page.");
+                return;
+            }
+            addSnippetFromSelection(chapterText, "Current section", 6000);
+        }
+
+        function getCombinedContext() {
+            if (!assistantState.contextSnippets.length) return "";
+            return assistantState.contextSnippets.map((s, idx) => `Snippet ${idx + 1}:\n${s.text}`).join("\n\n---\n\n");
+        }
+
+        async function askLLM(mode = "qa") {
+            if (assistantState.isBusy) return;
+
+            const question = questionInputEl.value.trim();
+            if (mode === "qa" && !question) {
+                statusEl.textContent = "Please enter a question.";
+                return;
+            }
+
+            const context = getCombinedContext();
+            if (!context && mode === "qa") {
+                statusEl.textContent = "Add some context first (highlight text or use section).";
+                return;
+            }
+
+            assistantState.isBusy = true;
+            askButtonEl.disabled = true;
+            summaryButtonEl.disabled = true;
+            statusEl.textContent = "Thinking...";
+
+            try {
+                const payload = {
+                    book_id: readerConfig.bookId,
+                    chapter_index: readerConfig.chapterIndex,
+                    question: question || "Summarize the provided section.",
+                    context,
+                    mode,
+                };
+
+                const res = await fetch("/api/llm/query", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Unexpected error from LLM endpoint.");
+                }
+
+                const data = await res.json();
+                responseEl.textContent = data.answer || "(No answer returned)";
+                const meta = data.model ? `Answered with ${data.model}` : "Answered";
+                statusEl.textContent = `${meta} • ${data.used_chars || 0} context characters`;
+            } catch (error) {
+                responseEl.textContent = "";
+                statusEl.textContent = error.message;
+            } finally {
+                assistantState.isBusy = false;
+                askButtonEl.disabled = false;
+                summaryButtonEl.disabled = false;
+            }
+        }
+
+        function setTooltipVisibility(visible, text = "") {
+            if (!visible) {
+                tooltipEl.classList.add("hidden");
+                tooltipEl.dataset.selection = "";
+                return;
+            }
+            tooltipEl.classList.remove("hidden");
+            tooltipEl.dataset.selection = text;
+        }
+
+        function positionTooltip(range) {
+            const rect = range.getBoundingClientRect();
+            tooltipEl.style.top = `${rect.top + window.scrollY - 40}px`;
+            tooltipEl.style.left = `${rect.left + window.scrollX}px`;
+        }
+
+        function handleSelection() {
+            const selection = window.getSelection();
+            if (!selection || selection.isCollapsed) {
+                setTooltipVisibility(false);
+                return;
+            }
+            const text = selection.toString().trim();
+            if (!text) {
+                setTooltipVisibility(false);
+                return;
+            }
+            try {
+                const range = selection.getRangeAt(0);
+                positionTooltip(range);
+                setTooltipVisibility(true, text);
+            } catch {
+                setTooltipVisibility(false);
+            }
+        }
+
+        tooltipEl.addEventListener("click", () => {
+            const text = tooltipEl.dataset.selection || "";
+            if (text) {
+                addSnippetFromSelection(text, "Selection");
+                window.getSelection()?.removeAllRanges();
+            }
+            setTooltipVisibility(false);
+        });
+
+        mainEl.addEventListener("mouseup", () => setTimeout(handleSelection, 0));
+        mainEl.addEventListener("keyup", handleSelection);
+        document.addEventListener("scroll", () => setTooltipVisibility(false), true);
+
+        clearBtn.addEventListener("click", clearContext);
+        addChapterBtn.addEventListener("click", addChapterAsContext);
+        askButtonEl.addEventListener("click", () => askLLM("qa"));
+        summaryButtonEl.addEventListener("click", () => {
+            if (!assistantState.contextSnippets.length) {
+                addChapterAsContext();
+            }
+            askLLM("summary");
+        });
+
+        renderContext();
+
+        // Keyboard shortcut: Cmd/Ctrl+Enter submits question
+        questionInputEl.addEventListener("keydown", (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                askLLM("qa");
+            }
+        });
     </script>
 </body>
 </html>

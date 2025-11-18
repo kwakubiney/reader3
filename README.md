@@ -1,4 +1,4 @@
-# reader 3
+# reader
 
 ![reader3](reader3.png)
 

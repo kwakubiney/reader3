@@ -275,12 +275,31 @@ def _build_toc_index_map(book: Book, spine_lookup: Dict[str, int]) -> Tuple[Dict
     return mapping, chapter_primary_map
 
 
+@app.get("/read/{book_id}/images/{image_name}")
+async def serve_image(book_id: str, image_name: str):
+    """
+    Serves images specifically for a book.
+    The HTML contains <img src="images/pic.jpg">.
+    The browser resolves this to /read/{book_id}/images/pic.jpg.
+    """
+    # Security check: ensure book_id is clean
+    safe_book_id = os.path.basename(book_id)
+    safe_image_name = os.path.basename(image_name)
+
+    img_path = os.path.join(BOOKS_DIR, safe_book_id, "images", safe_image_name)
+
+    if not os.path.exists(img_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    return FileResponse(img_path)
+
+
 @app.get("/read/{book_id}", response_class=HTMLResponse)
 async def redirect_to_first_chapter(request: Request, book_id: str):
     """Helper to just go to chapter 0."""
     return await read_chapter(request=request, book_id=book_id, chapter_ref="0")
 
-@app.get("/read/{book_id}/{chapter_ref}", response_class=HTMLResponse)
+@app.get("/read/{book_id}/{chapter_ref:path}", response_class=HTMLResponse)
 async def read_chapter(request: Request, book_id: str, chapter_ref: str):
     """The main reader interface."""
     book = load_book_cached(book_id)
@@ -309,23 +328,7 @@ async def read_chapter(request: Request, book_id: str, chapter_ref: str):
         "toc_index_map": toc_index_map,
     })
 
-@app.get("/read/{book_id}/images/{image_name}")
-async def serve_image(book_id: str, image_name: str):
-    """
-    Serves images specifically for a book.
-    The HTML contains <img src="images/pic.jpg">.
-    The browser resolves this to /read/{book_id}/images/pic.jpg.
-    """
-    # Security check: ensure book_id is clean
-    safe_book_id = os.path.basename(book_id)
-    safe_image_name = os.path.basename(image_name)
 
-    img_path = os.path.join(BOOKS_DIR, safe_book_id, "images", safe_image_name)
-
-    if not os.path.exists(img_path):
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    return FileResponse(img_path)
 
 
 @app.post("/api/llm/query")

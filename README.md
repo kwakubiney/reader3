@@ -8,13 +8,13 @@ This project was 90% vibe coded just to illustrate how one can very easily [read
 
 ## Usage
 
-The project uses [uv](https://docs.astral.sh/uv/). So for example, download [Dracula EPUB3](https://www.gutenberg.org/ebooks/345) to this directory as `dracula.epub`, then:
+The project uses [uv](https://docs.astral.sh/uv/). So for example, download [Moby Dick EPUB3](https://www.gutenberg.org/ebooks/2701) to this directory as `moby_dick.epub`, then:
 
 ```bash
-uv run reader3.py dracula.epub
+uv run reader3.py moby_dick.epub
 ```
 
-This creates the directory `dracula_data`, which registers the book to your local library. We can then run the server:
+This creates the directory `moby_dick_data`, which registers the book to your local library. We can then run the server:
 
 ```bash
 uv run server.py

@@ -81,29 +81,15 @@
                         Ideally we match spine indices, but Reader 3 TOC maps to filenames.
                         We use a simple hash matching logic here.
                     -->
-                    {% set is_active = current_chapter.href == item.file_href %}
+                    {% set is_active = active_toc_href and item.href == active_toc_href %}
 
-                    <!--
-                       We need to find which linear chapter index (0, 1, 2) corresponds
-                       to this TOC entry file.
-                       Since that's hard to calculate in Jinja, we just link to the
-                       file anchor. BUT, to make our linear navigation work, we
-                       rely on the fact that the user is currently reading 'chapter_index'.
-
-                       Ideally, clicking a TOC link should find the 'index' of that file.
-                       For simplicity in this version: We link to the 'href' (filename)
-                       and let JavaScript or Backend handle it?
-
-                       Actually, let's just link to the file. The browser interprets #anchors.
-                       However, our router uses /read/book/INDEX.
-
-                       SIMPLE FIX: We won't link the TOC to the route index in this simple version
-                       unless we build a map. We will visually show structure,
-                       but rely on "Previous/Next" for linear reading.
-
-                       BETTER FIX: Use JavaScript to match filenames.
-                    -->
-                    <a href="#" onclick="findAndGo('{{ item.file_href }}')"
+                    {% set target_idx = toc_index_map.get(item.href) %}
+                    <a href="#"
+                       data-index="{{ target_idx if target_idx is not none else '' }}"
+                       data-filename="{{ item.file_href }}"
+                       data-anchor="{{ item.anchor }}"
+                       data-href="{{ item.href }}"
+                       onclick="return goToSection(event, this);"
                        class="toc-link {% if is_active %}active{% endif %}">
                         {{ item.title }}
                     </a>
@@ -179,32 +165,57 @@
     <div id="selectionTooltip" class="selection-tooltip hidden">Add to context</div>
 
     <script>
-        // Helper to map TOC filenames to Spine Indices
-        // Pass the spine data from python to JS
-        const spineMap = {
-            {% for ch in book.spine %}
-            "{{ ch.href }}": {{ ch.order }},
-            {% endfor %}
-        };
+        function scrollToAnchor(anchorId) {
+            if (!anchorId) return false;
+            const target = document.getElementById(anchorId);
+            if (target) {
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+                return true;
+            }
+            return false;
+        }
 
-        function findAndGo(filename) {
-            // The TOC usually has specific filenames e.g. "text/part001.html"
-            // Sometimes it has anchors "text/part001.html#header"
-            // We strip the anchor to find the page index
-            const cleanFile = filename.split('#')[0];
-            const anchor = filename.split('#')[1];
+        function goToSection(event, el) {
+            if (event) event.preventDefault();
+            if (!el) return false;
 
-            const idx = spineMap[cleanFile];
+            const idxAttr = el.dataset.index ?? "";
+            const anchor = el.dataset.anchor ?? "";
+            const filename = el.dataset.filename ?? "";
+            const hrefValue = el.dataset.href ?? "";
+            const idx = idxAttr !== "" ? Number(idxAttr) : NaN;
 
-            if (idx !== undefined) {
+            if (hrefValue) {
+                let url = "/read/{{ book_id }}/" + encodeURIComponent(hrefValue);
+                if (anchor) url += "#" + anchor;
+                window.location.href = url;
+                return false;
+            }
+
+            if (!Number.isNaN(idx)) {
+                if (idx === readerConfig.chapterIndex) {
+                    if (anchor && scrollToAnchor(anchor)) {
+                        return false;
+                    }
+                }
                 let url = "/read/{{ book_id }}/" + idx;
-                // If there was an anchor, we could try to scroll to it,
-                // but simple page loads often lose anchor position without extra JS.
-                // Let's just go to the page.
+                if (anchor) {
+                    url += "#" + anchor;
+                }
+                window.location.href = url;
+                return false;
+            }
+
+            if (filename) {
+                let url = "/read/{{ book_id }}/" + encodeURIComponent(filename);
+                if (anchor) {
+                    url += "#" + anchor;
+                }
                 window.location.href = url;
             } else {
-                console.log("Could not find index for", filename);
+                console.warn("No navigation target for TOC entry", el);
             }
+            return false;
         }
 
         // --- LLM Assistant ---

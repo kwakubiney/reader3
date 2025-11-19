@@ -1,7 +1,8 @@
 import os
 import pickle
 from functools import lru_cache
-from typing import Optional, Literal
+from typing import Optional, Literal, Iterable, Dict, Tuple
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
@@ -138,22 +139,159 @@ async def library_view(request: Request):
 
     return templates.TemplateResponse("library.html", {"request": request, "books": books})
 
-@app.get("/read/{book_id}", response_class=HTMLResponse)
-async def redirect_to_first_chapter(book_id: str):
-    """Helper to just go to chapter 0."""
-    return await read_chapter(book_id=book_id, chapter_index=0)
+def _resolve_chapter_index(book: Book, chapter_ref: Optional[str]) -> int:
+    """
+    Accepts either a numeric index or a filename (href) and returns the matching spine index.
+    """
+    if chapter_ref is None or chapter_ref == "":
+        return 0
 
-@app.get("/read/{book_id}/{chapter_index}", response_class=HTMLResponse)
-async def read_chapter(request: Request, book_id: str, chapter_index: int):
+    # 1. Try numeric index (default UX)
+    try:
+        idx = int(chapter_ref)
+    except ValueError:
+        idx = None
+    else:
+        if 0 <= idx < len(book.spine):
+            return idx
+
+    # 2. Try to match filenames / hrefs from TOC or inline links
+    normalized = unquote(chapter_ref).split("#")[0].lstrip("./")
+    base_name = os.path.basename(normalized)
+
+    for idx, chapter in enumerate(book.spine):
+        href = (chapter.href or "").lstrip("./")
+        href_base = os.path.basename(href)
+        if normalized == href or normalized == href_base or base_name == href or base_name == href_base:
+            return idx
+
+    raise HTTPException(status_code=404, detail="Chapter not found")
+
+
+def _normalize_href(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return unquote(value).split("#")[0].lstrip("./")
+
+
+def _split_href_components(value: Optional[str]) -> tuple[str, str]:
+    if not value:
+        return "", ""
+    decoded = unquote(value)
+    if "#" in decoded:
+        file_part, anchor = decoded.split("#", 1)
+    else:
+        file_part, anchor = decoded, ""
+    return file_part.lstrip("./"), anchor
+
+
+def _find_active_toc_href(
+    book: Book,
+    chapter_index: int,
+    chapter_ref: Optional[str],
+    chapter_primary_map: Dict[int, str],
+) -> Optional[str]:
+    ref_file, ref_anchor = _split_href_components(chapter_ref)
+    if ref_file:
+        def traverse(entries: Iterable[TOCEntry]) -> Optional[str]:
+            for entry in entries:
+                entry_file, entry_anchor = _split_href_components(entry.href)
+                if entry_file == ref_file:
+                    if ref_anchor:
+                        if entry_anchor == ref_anchor:
+                            return entry.href
+                    elif not entry_anchor:
+                        return entry.href
+                found = traverse(entry.children)
+                if found:
+                    return found
+            return None
+
+        matched = traverse(book.toc)
+        if matched:
+            return matched
+
+    target = _normalize_href(book.spine[chapter_index].href)
+
+    def traverse_by_file(entries: Iterable[TOCEntry]) -> Optional[str]:
+        for entry in entries:
+            entry_target = _normalize_href(entry.file_href or entry.href)
+            if entry_target == target:
+                return entry.href
+            found = traverse_by_file(entry.children)
+            if found:
+                return found
+        return None
+
+    primary = chapter_primary_map.get(chapter_index)
+    if primary:
+        return primary
+
+    return traverse_by_file(book.toc)
+
+
+def _build_spine_lookup(book: Book) -> Dict[str, int]:
+    lookup: Dict[str, int] = {}
+    for idx, chapter in enumerate(book.spine):
+        href = chapter.href or ""
+        normalized = _normalize_href(href)
+        candidates = {
+            href,
+            normalized,
+            os.path.basename(href),
+            os.path.basename(normalized),
+        }
+        for key in candidates:
+            if key:
+                lookup[key] = idx
+    return lookup
+
+
+def _build_toc_index_map(book: Book, spine_lookup: Dict[str, int]) -> Tuple[Dict[str, int], Dict[int, str]]:
+    mapping: Dict[str, int] = {}
+    chapter_primary_map: Dict[int, str] = {}
+
+    def traverse(entries: Iterable[TOCEntry]):
+        for entry in entries:
+            idx = None
+            candidates = [
+                entry.file_href,
+                _normalize_href(entry.file_href),
+                entry.href,
+                _normalize_href(entry.href),
+                os.path.basename(entry.file_href or ""),
+                os.path.basename(_normalize_href(entry.file_href or "")),
+            ]
+            for key in candidates:
+                if key and key in spine_lookup:
+                    idx = spine_lookup[key]
+                    mapping[entry.href] = idx
+                    if idx not in chapter_primary_map:
+                        chapter_primary_map[idx] = entry.href
+                    break
+            traverse(entry.children)
+
+    traverse(book.toc)
+    return mapping, chapter_primary_map
+
+
+@app.get("/read/{book_id}", response_class=HTMLResponse)
+async def redirect_to_first_chapter(request: Request, book_id: str):
+    """Helper to just go to chapter 0."""
+    return await read_chapter(request=request, book_id=book_id, chapter_ref="0")
+
+@app.get("/read/{book_id}/{chapter_ref}", response_class=HTMLResponse)
+async def read_chapter(request: Request, book_id: str, chapter_ref: str):
     """The main reader interface."""
     book = load_book_cached(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    if chapter_index < 0 or chapter_index >= len(book.spine):
-        raise HTTPException(status_code=404, detail="Chapter not found")
-
+    chapter_index = _resolve_chapter_index(book, chapter_ref)
     current_chapter = book.spine[chapter_index]
+    spine_lookup = _build_spine_lookup(book)
+    toc_index_map, chapter_primary_map = _build_toc_index_map(book, spine_lookup)
+    active_toc_href = _find_active_toc_href(book, chapter_index, chapter_ref, chapter_primary_map)
 
     # Calculate Prev/Next links
     prev_idx = chapter_index - 1 if chapter_index > 0 else None
@@ -166,7 +304,9 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
         "chapter_index": chapter_index,
         "book_id": book_id,
         "prev_idx": prev_idx,
-        "next_idx": next_idx
+        "next_idx": next_idx,
+        "active_toc_href": active_toc_href,
+        "toc_index_map": toc_index_map,
     })
 
 @app.get("/read/{book_id}/images/{image_name}")

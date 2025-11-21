@@ -36,6 +36,61 @@
         .nav-btn:hover { background: #3498db; color: white; }
         .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: #ccc; color: #ccc; }
 
+        /* Assistant Panel */
+        #assistant-panel { width: 420px; background: #f5f5f7; border-left: 1px solid #e9ecef; padding: 30px; overflow-y: auto; font-family: -apple-system, sans-serif; }
+        .assistant-wrapper { max-width: 768px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
+        .assistant-card { background: #ffffff; border: 1px solid #eceef2; border-radius: 18px; padding: 24px; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06); }
+        .section-heading { text-align: center; }
+        .section-heading h2 { font-size: 1.125rem; font-weight: 600; margin: 0; color: #111827; }
+        .section-heading p { font-size: 0.9rem; color: #6b7280; margin: 4px 0 0; }
+
+        #contextList { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+        .context-card { background: #f9fafb; border: 1px solid #e3e8ef; border-radius: 12px; padding: 12px 14px 12px 16px; font-size: 0.9rem; line-height: 1.4; color: #374151; position: relative; }
+        .context-card button { position: absolute; top: 10px; right: 10px; border: none; background: transparent; color: #9ca3af; cursor: pointer; font-size: 0.9em; }
+        .context-card button:hover { color: #ef4444; }
+        .context-card small { display: block; color: #9ca3af; margin-top: 8px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+        .context-empty { font-size: 0.9rem; color: #9ca3af; font-style: italic; margin-top: 16px; }
+        .context-meta { font-size: 0.85em; color: #6b7280; margin-top: 8px; }
+        .snippet-controls { margin-top: 16px; display: flex; gap: 10px; align-items: center; }
+        .snippet-controls button { flex: 1; }
+
+        .primary-btn,
+        .secondary-btn,
+        .clear-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            border: 1px solid transparent;
+            padding: 10px 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .primary-btn { background: #111827; color: #ffffff; }
+        .primary-btn:disabled { background: #4b5563; cursor: not-allowed; }
+        .secondary-btn { background: #ffffff; border-color: #d1d5db; color: #111827; }
+        .secondary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .clear-btn { background: transparent; border-color: #e5e7eb; color: #374151; }
+        .clear-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .snippet-btn { padding: 8px 12px; border-radius: 10px; font-size: 0.9rem; }
+
+        textarea#questionInput { width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; font-family: inherit; font-size: 0.9rem; min-height: 6rem; resize: none; background: #ffffff; box-sizing: border-box; margin-top: 16px; }
+        textarea#questionInput::placeholder { font-family: inherit; font-size: 0.9rem; color: #9ca3af; }
+        textarea#questionInput:focus { outline: none; border-color: #111827; box-shadow: 0 0 0 1px #111827; }
+        .question-actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+        .question-actions button { flex: 1; }
+
+        #assistantStatus { font-size: 0.9em; color: #6b7280; min-height: 12px; margin-top: 14px; margin-bottom: 2px; }
+        #assistantStatus:empty { display: none; }
+        #assistantResponse { white-space: pre-wrap; line-height: 1.5; font-size: 0.9rem; }
+        .answer-box { min-height: 120px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; background: #f9fafb; color: #1f2937; margin-top: 16px; width: 100%; box-sizing: border-box; }
+        .question-card { padding-bottom: 20px; }
+
+        .selection-tooltip { position: absolute; background: #212529; color: white; padding: 6px 10px; border-radius: 999px; font-size: 0.85em; pointer-events: auto; cursor: pointer; box-shadow: 0 8px 20px rgba(0,0,0,0.15); z-index: 10; }
+        .selection-tooltip.hidden { display: none; }
+
     </style>
 </head>
 <body>
@@ -56,29 +111,15 @@
                         Ideally we match spine indices, but Reader 3 TOC maps to filenames.
                         We use a simple hash matching logic here.
                     -->
-                    {% set is_active = current_chapter.href == item.file_href %}
+                    {% set is_active = active_toc_href and item.href == active_toc_href %}
 
-                    <!--
-                       We need to find which linear chapter index (0, 1, 2) corresponds
-                       to this TOC entry file.
-                       Since that's hard to calculate in Jinja, we just link to the
-                       file anchor. BUT, to make our linear navigation work, we
-                       rely on the fact that the user is currently reading 'chapter_index'.
-
-                       Ideally, clicking a TOC link should find the 'index' of that file.
-                       For simplicity in this version: We link to the 'href' (filename)
-                       and let JavaScript or Backend handle it?
-
-                       Actually, let's just link to the file. The browser interprets #anchors.
-                       However, our router uses /read/book/INDEX.
-
-                       SIMPLE FIX: We won't link the TOC to the route index in this simple version
-                       unless we build a map. We will visually show structure,
-                       but rely on "Previous/Next" for linear reading.
-
-                       BETTER FIX: Use JavaScript to match filenames.
-                    -->
-                    <a href="#" onclick="findAndGo('{{ item.file_href }}')"
+                    {% set target_idx = toc_index_map.get(item.href) %}
+                    <a href="#"
+                       data-index="{{ target_idx if target_idx is not none else '' }}"
+                       data-filename="{{ item.file_href }}"
+                       data-anchor="{{ item.anchor }}"
+                       data-href="{{ item.href }}"
+                       onclick="return goToSection(event, this);"
                        class="toc-link {% if is_active %}active{% endif %}">
                         {{ item.title }}
                     </a>
@@ -121,34 +162,324 @@
         </div>
     </div>
 
+    <div id="assistant-panel">
+        <div class="assistant-wrapper">
+
+            <section class="assistant-card" aria-labelledby="contextHeading">
+                <div class="section-heading">
+                    <h2 id="contextHeading">Context Snippet</h2>
+                    <p>Highlight text and use “Add to context.”</p>
+                </div>
+                <div id="contextList"></div>
+                <div id="contextEmpty" class="context-empty">No snippet added yet. Highlight text in the chapter to capture it.</div>
+                <div id="contextMeta" class="context-meta"></div>
+                <div class="snippet-controls">
+                    <button id="addChapterBtn" class="secondary-btn snippet-btn" title="Use the whole chapter as context">Use entire chapter</button>
+                    <button id="clearContextBtn" class="clear-btn snippet-btn" title="Remove the snippet">Clear</button>
+                </div>
+            </section>
+
+            <section class="assistant-card question-card" aria-labelledby="questionHeading">
+                <div class="section-heading">
+                    <h2 id="questionHeading">Question</h2>
+                </div>
+                <textarea id="questionInput" placeholder="Type your question..."></textarea>
+                <div class="question-actions">
+                    <button id="askButton" class="primary-btn">Ask</button>
+                    <button id="summaryButton" class="secondary-btn" title="Get a concise summary of the chapter">Summarize</button>
+                </div>
+                <div id="assistantStatus"></div>
+            </section>
+
+            <section class="assistant-card" aria-labelledby="answerHeading">
+                <div class="section-heading">
+                    <h2 id="answerHeading">Answer</h2>
+                </div>
+                <div id="assistantResponse" class="answer-box">The answer will appear here.</div>
+            </section>
+
+        </div>
+    </div>
+
+    <div id="selectionTooltip" class="selection-tooltip hidden">Add to context</div>
+
     <script>
-        // Helper to map TOC filenames to Spine Indices
-        // Pass the spine data from python to JS
-        const spineMap = {
-            {% for ch in book.spine %}
-            "{{ ch.href }}": {{ ch.order }},
-            {% endfor %}
-        };
+        function scrollToAnchor(anchorId) {
+            if (!anchorId) return false;
+            const target = document.getElementById(anchorId);
+            if (target) {
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+                return true;
+            }
+            return false;
+        }
 
-        function findAndGo(filename) {
-            // The TOC usually has specific filenames e.g. "text/part001.html"
-            // Sometimes it has anchors "text/part001.html#header"
-            // We strip the anchor to find the page index
-            const cleanFile = filename.split('#')[0];
-            const anchor = filename.split('#')[1];
+        function goToSection(event, el) {
+            if (event) event.preventDefault();
+            if (!el) return false;
 
-            const idx = spineMap[cleanFile];
+            const idxAttr = el.dataset.index ?? "";
+            const anchor = el.dataset.anchor ?? "";
+            const filename = el.dataset.filename ?? "";
+            const hrefValue = el.dataset.href ?? "";
+            const idx = idxAttr !== "" ? Number(idxAttr) : NaN;
 
-            if (idx !== undefined) {
+            if (hrefValue) {
+                let url = "/read/{{ book_id }}/" + encodeURIComponent(hrefValue);
+                if (anchor) url += "#" + anchor;
+                window.location.href = url;
+                return false;
+            }
+
+            if (!Number.isNaN(idx)) {
+                if (idx === readerConfig.chapterIndex) {
+                    if (anchor && scrollToAnchor(anchor)) {
+                        return false;
+                    }
+                }
                 let url = "/read/{{ book_id }}/" + idx;
-                // If there was an anchor, we could try to scroll to it,
-                // but simple page loads often lose anchor position without extra JS.
-                // Let's just go to the page.
+                if (anchor) {
+                    url += "#" + anchor;
+                }
+                window.location.href = url;
+                return false;
+            }
+
+            if (filename) {
+                let url = "/read/{{ book_id }}/" + encodeURIComponent(filename);
+                if (anchor) {
+                    url += "#" + anchor;
+                }
                 window.location.href = url;
             } else {
-                console.log("Could not find index for", filename);
+                console.warn("No navigation target for TOC entry", el);
+            }
+            return false;
+        }
+
+        // --- LLM Assistant ---
+        const readerConfig = {{ {
+            "bookId": book_id,
+            "chapterIndex": chapter_index,
+            "bookTitle": book.metadata.title,
+        } | tojson }};
+
+        const assistantState = {
+            contextSnippets: [],
+            isBusy: false,
+        };
+
+        const contextListEl = document.getElementById("contextList");
+        const contextEmptyEl = document.getElementById("contextEmpty");
+        const contextMetaEl = document.getElementById("contextMeta");
+        const questionInputEl = document.getElementById("questionInput");
+        const askButtonEl = document.getElementById("askButton");
+        const summaryButtonEl = document.getElementById("summaryButton");
+        const statusEl = document.getElementById("assistantStatus");
+        const responseEl = document.getElementById("assistantResponse");
+        const clearBtn = document.getElementById("clearContextBtn");
+        const addChapterBtn = document.getElementById("addChapterBtn");
+        const tooltipEl = document.getElementById("selectionTooltip");
+        const mainEl = document.getElementById("main");
+        const answerPlaceholder = "The answer will appear here.";
+        responseEl.textContent = answerPlaceholder;
+
+        function makeId() {
+            if (window.crypto?.randomUUID) return crypto.randomUUID();
+            return String(Date.now() + Math.random());
+        }
+
+        function renderContext() {
+            contextListEl.innerHTML = "";
+            const snippet = assistantState.contextSnippets[0];
+            if (!snippet) {
+                contextEmptyEl.style.display = "block";
+                contextMetaEl.textContent = "";
+                return;
+            }
+            contextEmptyEl.style.display = "none";
+
+            const card = document.createElement("div");
+            card.className = "context-card";
+
+            const remover = document.createElement("button");
+            remover.setAttribute("aria-label", "Remove snippet");
+            remover.innerHTML = "×";
+            remover.addEventListener("click", () => removeSnippet(snippet.id));
+
+            const content = document.createElement("div");
+            content.textContent = snippet.text;
+
+            const meta = document.createElement("small");
+            meta.textContent = snippet.label || "Snippet";
+
+            card.appendChild(remover);
+            card.appendChild(content);
+            card.appendChild(meta);
+            contextListEl.appendChild(card);
+
+            contextMetaEl.textContent = `1 snippet • ${snippet.text.length} characters`;
+        }
+
+        function removeSnippet(id) {
+            assistantState.contextSnippets = assistantState.contextSnippets.filter(s => s.id !== id);
+            renderContext();
+        }
+
+        function clearContext() {
+            assistantState.contextSnippets = [];
+            renderContext();
+        }
+
+        function addSnippetFromSelection(text, label, maxLen = 2000) {
+            const clean = text.trim();
+            if (!clean) return;
+            const snippet = {
+                id: makeId(),
+                text: clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean,
+                label: label || `Selection`,
+            };
+            assistantState.contextSnippets = [snippet];
+            renderContext();
+        }
+
+        function addChapterAsContext() {
+            const chapterText = document.querySelector(".book-content")?.innerText || "";
+            if (!chapterText.trim()) {
+                alert("Couldn't read the chapter text from the page.");
+                return;
+            }
+            addSnippetFromSelection(chapterText, "Current section", 6000);
+        }
+
+        function getCombinedContext() {
+            if (!assistantState.contextSnippets.length) return "";
+            return assistantState.contextSnippets.map((s, idx) => `Snippet ${idx + 1}:\n${s.text}`).join("\n\n---\n\n");
+        }
+
+        async function askLLM(mode = "qa") {
+            if (assistantState.isBusy) return;
+
+            const question = questionInputEl.value.trim();
+            if (mode === "qa" && !question) {
+                statusEl.textContent = "Please enter a question.";
+                return;
+            }
+
+            const context = getCombinedContext();
+            if (!context && mode === "qa") {
+                statusEl.textContent = "Add some context first (highlight text or use section).";
+                return;
+            }
+
+            assistantState.isBusy = true;
+            askButtonEl.disabled = true;
+            summaryButtonEl.disabled = true;
+            statusEl.textContent = "Thinking...";
+
+            try {
+                const payload = {
+                    book_id: readerConfig.bookId,
+                    chapter_index: readerConfig.chapterIndex,
+                    question: question || "Summarize the provided section.",
+                    context,
+                    mode,
+                };
+
+                const res = await fetch("/api/llm/query", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Unexpected error from LLM endpoint.");
+                }
+
+                const data = await res.json();
+                const answer = (data.answer || "").trim();
+                responseEl.textContent = answer || answerPlaceholder;
+                const meta = data.model ? `Answered with ${data.model}` : "Answered";
+                statusEl.textContent = `${meta} • ${data.used_chars || 0} context characters`;
+            } catch (error) {
+                responseEl.textContent = answerPlaceholder;
+                statusEl.textContent = error.message;
+            } finally {
+                assistantState.isBusy = false;
+                askButtonEl.disabled = false;
+                summaryButtonEl.disabled = false;
             }
         }
+
+        function setTooltipVisibility(visible, text = "") {
+            if (!visible) {
+                tooltipEl.classList.add("hidden");
+                tooltipEl.dataset.selection = "";
+                return;
+            }
+            tooltipEl.classList.remove("hidden");
+            tooltipEl.dataset.selection = text;
+        }
+
+        function positionTooltip(range) {
+            const rect = range.getBoundingClientRect();
+            tooltipEl.style.top = `${rect.top + window.scrollY - 40}px`;
+            tooltipEl.style.left = `${rect.left + window.scrollX}px`;
+        }
+
+        function handleSelection() {
+            const selection = window.getSelection();
+            if (!selection || selection.isCollapsed) {
+                setTooltipVisibility(false);
+                return;
+            }
+            const text = selection.toString().trim();
+            if (!text) {
+                setTooltipVisibility(false);
+                return;
+            }
+            try {
+                const range = selection.getRangeAt(0);
+                positionTooltip(range);
+                setTooltipVisibility(true, text);
+            } catch {
+                setTooltipVisibility(false);
+            }
+        }
+
+        tooltipEl.addEventListener("click", () => {
+            const text = tooltipEl.dataset.selection || "";
+            if (text) {
+                addSnippetFromSelection(text, "Selection");
+                window.getSelection()?.removeAllRanges();
+            }
+            setTooltipVisibility(false);
+        });
+
+        mainEl.addEventListener("mouseup", () => setTimeout(handleSelection, 0));
+        mainEl.addEventListener("keyup", handleSelection);
+        document.addEventListener("scroll", () => setTooltipVisibility(false), true);
+
+        clearBtn.addEventListener("click", clearContext);
+        addChapterBtn.addEventListener("click", addChapterAsContext);
+        askButtonEl.addEventListener("click", () => askLLM("qa"));
+        summaryButtonEl.addEventListener("click", () => {
+            if (!assistantState.contextSnippets.length) {
+                addChapterAsContext();
+            }
+            askLLM("summary");
+        });
+
+        renderContext();
+
+        // Keyboard shortcut: Cmd/Ctrl+Enter submits question
+        questionInputEl.addEventListener("keydown", (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                askLLM("qa");
+            }
+        });
     </script>
 </body>
 </html>
